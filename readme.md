@@ -5,6 +5,7 @@ this spiders the bitcoin network for the purpose of retrieving ipv4/ipv6_ip:port
 # instructions
 ```
 snap install go --classic
+go get github.com/cheggaaa/pb/v3
 git clone https://github.com/visualbasic6/bithop.git
 cd bithop
 go run bithop.go
