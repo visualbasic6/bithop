@@ -12,11 +12,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cheggaaa/pb/v3"
 )
 
 const (
 	Magic           uint32 = 0xD9B4BEF9
 	ProtocolVersion uint32 = 70015
+	TotalIPsTarget  int    = 20000
 )
 
 var dnsSeeds = []string{
@@ -37,26 +40,32 @@ var nodes = struct {
 	addrs map[string]bool
 }{addrs: make(map[string]bool)}
 
-var outputFile *os.File
+var (
+	outputFile    *os.File
+	totalCollected int
+	totalMutex    sync.Mutex
+	startTime     time.Time
+	bar           *pb.ProgressBar
+)
 
 func main() {
+	displayArt()
+
+	startTime = time.Now()
 	var wg sync.WaitGroup
 
-	// Open file for saving nodes
 	var err error
 	outputFile, err = os.Create("nodes.txt")
 	if err != nil {
-		fmt.Printf("Error creating file: %v\n", err)
+		fmt.Printf("error creating file: %v\n", err)
 		return
 	}
 	defer outputFile.Close()
 
-	// Prompt user for the number of goroutines
 	var numGoroutines int
-	fmt.Print("Enter the number of goroutines: ")
+	fmt.Print("enter amount of parallel threads: ")
 	fmt.Scanln(&numGoroutines)
 
-	// Resolve DNS seeds
 	for _, seed := range dnsSeeds {
 		wg.Add(1)
 		go func(seed string) {
@@ -66,34 +75,61 @@ func main() {
 	}
 	wg.Wait()
 
-	// Create a channel to manage tasks
 	taskChan := make(chan string, len(nodes.addrs))
 
-	// Add nodes to the task channel
 	for addr := range nodes.addrs {
 		taskChan <- addr
 	}
 	close(taskChan)
 
-	// Create worker pool
+	bar = pb.New(TotalIPsTarget)
+	bar.Set(pb.Bytes, false)
+	bar.SetTemplateString(`{{bar . "[" "░▒▓" "]"}} {{percent . }} {{rtime .}}`)
+
+	bar.Start()
+
 	var workerWG sync.WaitGroup
 	for i := 0; i < numGoroutines; i++ {
 		workerWG.Add(1)
-		go func() {
+		go func(threadID int) {
 			defer workerWG.Done()
 			for addr := range taskChan {
-				connectToNode(addr)
+				connectToNode(addr, threadID)
 			}
-		}()
+		}(i + 1)
 	}
 
+	go monitorProgress()
+
 	workerWG.Wait()
+	bar.Finish()
+}
+
+func displayArt() {
+    esc := "\x1b"
+
+    ansiArt := `
+%[1]s[49m                         %[1]s[m
+%[1]s[49m                         %[1]s[m
+%[1]s[49m     %[1]s[38;5;64;49m▄%[1]s[38;5;100;48;5;106m▄%[1]s[38;5;100;48;5;70m▄%[1]s[38;5;178;48;5;106m▄%[1]s[38;5;107;48;5;106m▄%[1]s[38;5;70;48;5;64m▄%[1]s[38;5;184;48;5;70m▄%[1]s[38;5;106;48;5;106m▄%[1]s[38;5;106;48;5;150m▄%[1]s[38;5;70;48;5;70m▄%[1]s[38;5;64;48;5;106m▄%[1]s[38;5;3;48;5;70m▄%[1]s[38;5;3;48;5;64m▄%[1]s[38;5;142;48;5;149m▄%[1]s[38;5;149;49m▄%[1]s[49m     %[1]s[m
+%[1]s[49m     %[1]s[38;5;100;48;5;100m▄%[1]s[38;5;232;48;5;222m▄%[1]s[38;5;233;48;5;232m▄%[1]s[38;5;234;48;5;243m▄%[1]s[38;5;3;48;5;100m▄%[1]s[38;5;106;48;5;113m▄%[1]s[38;5;148;48;5;112m▄%[1]s[38;5;149;48;5;149m▄%[1]s[38;5;149;48;5;148m▄%[1]s[38;5;70;48;5;70m▄%[1]s[38;5;52;48;5;95m▄%[1]s[38;5;233;48;5;252m▄%[1]s[38;5;0;48;5;232m▄%[1]s[38;5;236;48;5;252m▄%[1]s[38;5;178;48;5;143m▄%[1]s[49m     %[1]s[m
+%[1]s[49m     %[1]s[38;5;64;48;5;136m▄%[1]s[38;5;3;48;5;101m▄%[1]s[38;5;94;48;5;236m▄%[1]s[38;5;178;48;5;236m▄%[1]s[38;5;106;48;5;100m▄%[1]s[38;5;112;48;5;70m▄%[1]s[38;5;106;48;5;149m▄%[1]s[38;5;191;48;5;191m▄%[1]s[38;5;149;48;5;191m▄%[1]s[38;5;191;48;5;112m▄%[1]s[38;5;142;48;5;3m▄%[1]s[38;5;100;48;5;236m▄%[1]s[38;5;136;48;5;235m▄%[1]s[38;5;142;48;5;143m▄%[1]s[38;5;186;48;5;106m▄%[1]s[49m     %[1]s[m bithop beta v2
+%[1]s[49m     %[1]s[38;5;106;48;5;148m▄%[1]s[38;5;70;48;5;148m▄%[1]s[38;5;64;48;5;106m▄%[1]s[38;5;106;48;5;106m▄%[1]s[38;5;64;48;5;112m▄%[1]s[38;5;106;48;5;148m▄%[1]s[38;5;3;48;5;149m▄%[1]s[38;5;125;48;5;191m▄%[1]s[38;5;101;48;5;191m▄%[1]s[38;5;3;48;5;191m▄%[1]s[38;5;106;48;5;191m▄%[1]s[38;5;149;48;5;148m▄%[1]s[38;5;149;48;5;106m▄%[1]s[38;5;148;48;5;142m▄%[1]s[38;5;191;48;5;149m▄%[1]s[49m     %[1]s[m kevin mcsheehan (pad)
+%[1]s[49m      %[1]s[49;38;5;58m▀%[1]s[49;38;5;70m▀%[1]s[38;5;64;48;5;70m▄%[1]s[38;5;64;48;5;112m▄%[1]s[38;5;64;48;5;149m▄▄%[1]s[38;5;70;48;5;148m▄%[1]s[38;5;64;48;5;191m▄▄▄%[1]s[38;5;64;48;5;149m▄%[1]s[49;38;5;148m▀%[1]s[49;38;5;64m▀%[1]s[49m      %[1]s[m x.com/123456
+%[1]s[49m     %[1]s[38;5;106;49m▄%[1]s[38;5;149;49m▄%[1]s[38;5;106;49m▄%[1]s[38;5;106;48;5;148m▄%[1]s[38;5;3;48;5;70m▄%[1]s[38;5;227;48;5;142m▄%[1]s[38;5;229;48;5;149m▄▄▄%[1]s[38;5;227;48;5;148m▄%[1]s[38;5;185;48;5;64m▄%[1]s[38;5;70;48;5;70m▄%[1]s[38;5;106;48;5;107m▄%[1]s[38;5;70;49m▄%[1]s[38;5;150;49m▄%[1]s[38;5;15;49m▄%[1]s[49m    %[1]s[m
+%[1]s[49m     %[1]s[38;5;64;48;5;106m▄%[1]s[38;5;58;48;5;64m▄%[1]s[38;5;70;48;5;70m▄%[1]s[38;5;112;48;5;106m▄%[1]s[38;5;58;48;5;64m▄%[1]s[38;5;64;48;5;100m▄%[1]s[38;5;185;48;5;228m▄%[1]s[38;5;221;48;5;230m▄%[1]s[38;5;185;48;5;228m▄%[1]s[38;5;184;48;5;227m▄%[1]s[38;5;3;48;5;58m▄%[1]s[38;5;185;48;5;58m▄%[1]s[38;5;112;48;5;112m▄%[1]s[38;5;64;48;5;70m▄%[1]s[38;5;70;48;5;106m▄%[1]s[38;5;106;48;5;148m▄%[1]s[49m    %[1]s[m
+%[1]s[49m    %[1]s[38;5;106;49m▄%[1]s[38;5;64;48;5;58m▄▄%[1]s[38;5;22;48;5;234m▄%[1]s[38;5;106;48;5;106m▄%[1]s[38;5;106;48;5;64m▄%[1]s[38;5;234;48;5;58m▄%[1]s[38;5;142;48;5;142m▄%[1]s[38;5;136;48;5;178m▄%[1]s[38;5;136;48;5;142m▄%[1]s[38;5;3;48;5;136m▄%[1]s[38;5;106;48;5;58m▄%[1]s[38;5;106;48;5;106m▄%[1]s[38;5;22;48;5;65m▄%[1]s[38;5;64;48;5;22m▄%[1]s[38;5;70;48;5;64m▄%[1]s[38;5;107;49m▄%[1]s[49m    %[1]s[m
+%[1]s[49m    %[1]s[49;38;5;106m▀▀%[1]s[49;38;5;149m▀%[1]s[49;38;5;106m▀%[1]s[38;5;149;48;5;64m▄%[1]s[38;5;64;48;5;106m▄%[1]s[38;5;149;48;5;106m▄%[1]s[38;5;58;48;5;107m▄%[1]s[49m %[1]s[38;5;58;48;5;106m▄%[1]s[38;5;107;48;5;106m▄%[1]s[38;5;64;48;5;112m▄%[1]s[38;5;107;48;5;143m▄%[1]s[49;38;5;64m▀%[1]s[49;38;5;70m▀%[1]s[38;5;237;48;5;106m▄%[1]s[49;38;5;113m▀%[1]s[49;38;5;148m▀%[1]s[49m   %[1]s[m
+%[1]s[49m                         %[1]s[m
+%[1]s[49m                         %[1]s[m
+`
+
+    fmt.Printf(ansiArt, esc)
 }
 
 func resolveDNS(seed string) {
 	addrs, err := net.LookupHost(seed)
 	if err != nil {
-		fmt.Printf("DNS lookup failed for %s: %v\n", seed, err)
 		return
 	}
 
@@ -108,38 +144,46 @@ func resolveDNS(seed string) {
 	}
 }
 
-func connectToNode(addr string) {
+func connectToNode(addr string, threadID int) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		fmt.Printf("Connection to %s failed: %v\n", addr, err)
 		return
 	}
 	defer conn.Close()
 
 	if err := handshake(conn); err != nil {
-		fmt.Printf("Handshake with %s failed: %v\n", addr, err)
 		return
 	}
 
 	if err := sendMessage(conn, "getaddr", nil); err != nil {
-		fmt.Printf("Sending getaddr to %s failed: %v\n", addr, err)
 		return
 	}
 
 	for {
 		command, payload, err := receiveMessage(conn)
 		if err != nil {
-			fmt.Printf("Receiving addr from %s failed: %v\n", addr, err)
 			return
 		}
 
 		if command == "addr" {
-			processAddrPayload(payload)
+			processAddrPayload(payload, threadID)
 		}
 	}
 }
 
-func processAddrPayload(payload []byte) {
+func monitorProgress() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		totalMutex.Lock()
+		ipsPerMinute := float64(totalCollected) / time.Since(startTime).Minutes()
+		fmt.Printf("\r\033[2Ktotal IP addresses collected: %d, IPs collected per minute: %.2f", totalCollected, ipsPerMinute)
+		totalMutex.Unlock()
+	}
+}
+
+func processAddrPayload(payload []byte, threadID int) {
 	count, bytesRead := decodeVarInt(payload)
 	for i := 0; i < int(count); i++ {
 		if bytesRead+30 > len(payload) {
@@ -170,13 +214,17 @@ func processAddrPayload(payload []byte) {
 		if !nodes.addrs[addr] {
 			nodes.addrs[addr] = true
 			nodes.Unlock()
-			go connectToNode(addr) // Start a new goroutine for each new node
+			go connectToNode(addr, threadID)
 		} else {
 			nodes.Unlock()
 		}
 
-		// Save to file
 		saveNode(addr)
+		totalMutex.Lock()
+		totalCollected++
+		fmt.Printf("\r\033[1A\033[K[%02d] ip: %s\n", threadID, addr)
+		bar.SetCurrent(int64(totalCollected))
+		totalMutex.Unlock()
 	}
 }
 
@@ -214,9 +262,6 @@ func handshake(conn net.Conn) error {
 func sendMessage(conn net.Conn, command string, payload []byte) error {
 	_, err := conn.Write(packCommand(command, payload))
 	if err != nil {
-		if err == io.EOF || strings.Contains(err.Error(), "broken pipe") {
-			return fmt.Errorf("connection closed: %v", err)
-		}
 		return err
 	}
 	return nil
@@ -225,9 +270,6 @@ func sendMessage(conn net.Conn, command string, payload []byte) error {
 func receiveMessage(conn net.Conn) (string, []byte, error) {
 	header := make([]byte, 24)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		if err == io.EOF || strings.Contains(err.Error(), "broken pipe") {
-			return "", nil, fmt.Errorf("connection closed: %v", err)
-		}
 		return "", nil, err
 	}
 
@@ -236,9 +278,6 @@ func receiveMessage(conn net.Conn) (string, []byte, error) {
 	payload := make([]byte, length)
 	if length > 0 {
 		if _, err := io.ReadFull(conn, payload); err != nil {
-			if err == io.EOF || strings.Contains(err.Error(), "broken pipe") {
-				return "", nil, fmt.Errorf("connection closed: %v", err)
-			}
 			return "", nil, err
 		}
 		firstSHA := sha256.Sum256(payload)
@@ -274,14 +313,14 @@ func createVersionPayload() []byte {
 
 	payload := bytes.NewBuffer(nil)
 	binary.Write(payload, binary.LittleEndian, ProtocolVersion)
-	binary.Write(payload, binary.LittleEndian, uint64(1)) // Services
+	binary.Write(payload, binary.LittleEndian, uint64(1))
 	binary.Write(payload, binary.LittleEndian, uint64(time.Now().Unix()))
-	payload.Write(addr[:]) // Receiver address
-	payload.Write(addr[:]) // Sender address
-	binary.Write(payload, binary.LittleEndian, rand.Uint64()) // Nonce
-	payload.Write([]byte{0}) // User agent (empty string)
-	binary.Write(payload, binary.LittleEndian, int32(0)) // Start height
-	payload.WriteByte(0) // Relay
+	payload.Write(addr[:])
+	payload.Write(addr[:])
+	binary.Write(payload, binary.LittleEndian, rand.Uint64())
+	payload.Write([]byte{0})
+	binary.Write(payload, binary.LittleEndian, int32(0))
+	payload.WriteByte(0)
 
 	return payload.Bytes()
 }
