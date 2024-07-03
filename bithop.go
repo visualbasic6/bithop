@@ -17,7 +17,7 @@ import (
 
 const (
 	Magic           uint32 = 0xD9B4BEF9
-	ProtocolVersion uint32 = 70015
+	ProtocolVersion uint32 = 77777
 	PauseInterval   int    = 1000
 )
 
