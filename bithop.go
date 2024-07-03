@@ -4,22 +4,21 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"math/rand"
 	"fmt"
 	"io"
-	"math/rand"
+	"bufio"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/cheggaaa/pb/v3"
 )
 
 const (
 	Magic           uint32 = 0xD9B4BEF9
 	ProtocolVersion uint32 = 70015
-	TotalIPsTarget  int    = 20000
+	PauseInterval   int    = 1000
 )
 
 var dnsSeeds = []string{
@@ -45,11 +44,11 @@ var (
 	totalCollected int
 	totalMutex    sync.Mutex
 	startTime     time.Time
-	bar           *pb.ProgressBar
 )
 
 func main() {
 	displayArt()
+	fmt.Print("\n")
 
 	startTime = time.Now()
 	var wg sync.WaitGroup
@@ -65,6 +64,7 @@ func main() {
 	var numGoroutines int
 	fmt.Print("enter amount of parallel threads: ")
 	fmt.Scanln(&numGoroutines)
+	fmt.Print("\n")
 
 	for _, seed := range dnsSeeds {
 		wg.Add(1)
@@ -82,12 +82,6 @@ func main() {
 	}
 	close(taskChan)
 
-	bar = pb.New(TotalIPsTarget)
-	bar.Set(pb.Bytes, false)
-	bar.SetTemplateString(`{{bar . "[" "░▒▓" "]"}} {{percent . }} {{rtime .}}`)
-
-	bar.Start()
-
 	var workerWG sync.WaitGroup
 	for i := 0; i < numGoroutines; i++ {
 		workerWG.Add(1)
@@ -102,7 +96,21 @@ func main() {
 	go monitorProgress()
 
 	workerWG.Wait()
-	bar.Finish()
+	fmt.Println()
+}
+
+func monitorProgress() {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	fmt.Printf("\033[s")
+	for range ticker.C {
+		totalMutex.Lock()
+		ipsPerMinute := float64(totalCollected) / time.Since(startTime).Minutes()
+		fmt.Printf("\033[u\033[2K\rtotal ip addresses collected: %d, ips per minute: %.2f", totalCollected, ipsPerMinute)
+		totalMutex.Unlock()
+	}
+	fmt.Println()
 }
 
 func displayArt() {
@@ -171,18 +179,6 @@ func connectToNode(addr string, threadID int) {
 	}
 }
 
-func monitorProgress() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		totalMutex.Lock()
-		ipsPerMinute := float64(totalCollected) / time.Since(startTime).Minutes()
-		fmt.Printf("\r\033[2Ktotal IP addresses collected: %d, IPs collected per minute: %.2f", totalCollected, ipsPerMinute)
-		totalMutex.Unlock()
-	}
-}
-
 func processAddrPayload(payload []byte, threadID int) {
 	count, bytesRead := decodeVarInt(payload)
 	for i := 0; i < int(count); i++ {
@@ -222,9 +218,30 @@ func processAddrPayload(payload []byte, threadID int) {
 		saveNode(addr)
 		totalMutex.Lock()
 		totalCollected++
-		fmt.Printf("\r\033[1A\033[K[%02d] ip: %s\n", threadID, addr)
-		bar.SetCurrent(int64(totalCollected))
+		if totalCollected%PauseInterval == 0 {
+			removeDuplicates()
+		}
 		totalMutex.Unlock()
+	}
+}
+
+func removeDuplicates() {
+	fmt.Println(" - removing duplicates...")
+	nodes.Lock()
+	defer nodes.Unlock()
+
+	uniqueAddrs := make(map[string]bool)
+	outputFile.Seek(0, 0)
+	scanner := bufio.NewScanner(outputFile)
+	for scanner.Scan() {
+		addr := scanner.Text()
+		uniqueAddrs[addr] = true
+	}
+
+	outputFile.Truncate(0)
+	outputFile.Seek(0, 0)
+	for addr := range uniqueAddrs {
+		outputFile.WriteString(addr + "\n")
 	}
 }
 
