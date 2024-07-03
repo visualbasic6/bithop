@@ -2,7 +2,7 @@
 
 this spiders the bitcoin network for the purpose of retrieving every machine running `bitcoind` across ipv4/ipv6. these are appended to `nodes.txt` in the same directory as the script. let it run for awhile until you've databased the entire network, which should be > 18k nodes. it automatically removes duplicates from `nodes.txt` once every 1,000 `ip:port` discoveries. you may need to let the program max out/stall and run it a handful of times to db the whole network. unstable beta.
 
-peers are discovered by exponentionally merging into them as spoofed nodes, following protocol specifications, and sending the `getaddr` protocol message which returns a node's peers in `ip:port` format. this technique is how bitnodes.io populates itself with node data - and to the best of my knowledge this is only other, and most performant, mainnet peer gatherer.
+peers are discovered by exponentionally merging into them as spoofed nodes, following protocol specifications, and sending the `getaddr` protocol message which returns a node's peers in `ip:port` format. this technique is how bitnodes.io populates itself with node data - and to the best of my knowledge this is only other p2p mainnet node gatherer.
 
 # how to use
 ```
