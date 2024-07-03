@@ -18,4 +18,4 @@ go run bithop.go
 # conclusion
 bithop is another excercise in familiarizing myself with lower level code and golang. it could be reworked and expanded to be a sophisticated bitcoin block explorer - but i haven't the time nor desire.
 
-follow https://x.com/123456 for updates - assuming there ever are any.
+follow me at https://x.com/123456 for updates - assuming there ever are any.
